@@ -257,32 +257,33 @@ export async function POST(request: NextRequest) {
       return NextResponse.json(response);
     }
 
-    // Cache miss: query EPA + scrape EWG in parallel
-    const waterStatusPromise = querySDWIS(normalizedCity, normalizedState);
+    // Run EPA query and zip geocoding in parallel
+    const resolvedZipPromise = zip
+      ? Promise.resolve(zip)
+      : geocodeCityToZip(normalizedCity, normalizedState).catch((e) => {
+          console.error("[TapCheck] Geocode failed:", e);
+          return undefined;
+        });
 
-    const waterStatus = await waterStatusPromise;
+    const [waterStatus, resolvedZip] = await Promise.all([
+      querySDWIS(normalizedCity, normalizedState),
+      resolvedZipPromise,
+    ]);
 
-    // Scrape EWG: use zip (from user or geocoded from city/state)
-    let resolvedZip = zip;
-    if (!resolvedZip) {
-      try {
-        resolvedZip = await geocodeCityToZip(normalizedCity, normalizedState);
-      } catch {
-        // Geocoding failure is non-critical
-      }
-    }
-
+    // Scrape EWG using resolved zip
     let contaminantLevels: ContaminantLevel[] = [];
-    try {
-      let ewgData;
-      if (resolvedZip) {
-        ewgData = await scrapeEWGByZip(resolvedZip);
+    if (resolvedZip) {
+      try {
+        const ewgData = await scrapeEWGByZip(resolvedZip);
+        console.log(`[TapCheck] EWG scrape for zip ${resolvedZip}: ${ewgData.length} contaminants`);
+        if (ewgData.length > 0) {
+          contaminantLevels = buildContaminantLevels(ewgData);
+        }
+      } catch (e) {
+        console.error("[TapCheck] EWG scrape failed:", e);
       }
-      if (ewgData && ewgData.length > 0) {
-        contaminantLevels = buildContaminantLevels(ewgData);
-      }
-    } catch {
-      // EWG scrape failure is non-critical
+    } else {
+      console.warn("[TapCheck] No zip code resolved, skipping EWG scrape");
     }
 
     waterStatus.contaminantLevels = contaminantLevels;

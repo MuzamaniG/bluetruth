@@ -31,9 +31,14 @@ export async function scrapeEWGByZip(
       }
     });
 
-    if (!pwsid) return [];
+    if (!pwsid) {
+      console.warn("[TapCheck] No PWSID found in EWG search results for zip:", zip);
+      return [];
+    }
+    console.log("[TapCheck] Found EWG system:", pwsid, "for zip:", zip);
     return scrapeEWGByPWSID(pwsid);
-  } catch {
+  } catch (e) {
+    console.error("[TapCheck] scrapeEWGByZip failed:", e);
     return [];
   }
 }
@@ -47,8 +52,11 @@ export async function scrapeEWGByPWSID(
   try {
     const url = `${EWG_BASE}/system.php?pws=${encodeURIComponent(pwsid)}`;
     const html = await fetchPage(url);
-    return parseEWGSystemPage(html);
-  } catch {
+    const results = parseEWGSystemPage(html);
+    console.log(`[TapCheck] Parsed ${results.length} contaminants from EWG system ${pwsid}`);
+    return results;
+  } catch (e) {
+    console.error("[TapCheck] scrapeEWGByPWSID failed:", e);
     return [];
   }
 }
@@ -57,12 +65,17 @@ async function fetchPage(url: string): Promise<string> {
   const res = await fetch(url, {
     headers: {
       "User-Agent":
-        "Mozilla/5.0 (compatible; TapCheck/1.0; water-safety-checker)",
-      Accept: "text/html,application/xhtml+xml",
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+      Accept:
+        "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+      "Accept-Language": "en-US,en;q=0.9",
     },
-    signal: AbortSignal.timeout(10000),
+    signal: AbortSignal.timeout(15000),
   });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  if (!res.ok) {
+    console.error(`[TapCheck] EWG fetch failed: ${res.status} ${res.statusText} for ${url}`);
+    throw new Error(`HTTP ${res.status}`);
+  }
   return res.text();
 }
 
