@@ -8,8 +8,12 @@ CREATE TABLE IF NOT EXISTS lookups (
   status TEXT NOT NULL CHECK (status IN ('green', 'yellow', 'red', 'gray')),
   summary TEXT NOT NULL,
   system_name TEXT,
+  pwsid TEXT,
   violation_count INTEGER NOT NULL DEFAULT 0,
   violations_json JSONB DEFAULT '[]',
+  contaminants_json JSONB DEFAULT '[]',
+  lead_copper_json JSONB DEFAULT '[]',
+  contaminant_levels_json JSONB DEFAULT '[]',
   checked_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
@@ -46,3 +50,9 @@ ALTER TABLE recommendations ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "Allow anonymous read on lookups" ON lookups FOR SELECT USING (true);
 CREATE POLICY "Allow anonymous insert on lookups" ON lookups FOR INSERT WITH CHECK (true);
 CREATE POLICY "Allow anonymous read on recommendations" ON recommendations FOR SELECT USING (true);
+
+-- Migration: add contaminant columns to existing installations
+-- ALTER TABLE lookups ADD COLUMN IF NOT EXISTS contaminants_json JSONB DEFAULT '[]';
+-- ALTER TABLE lookups ADD COLUMN IF NOT EXISTS lead_copper_json JSONB DEFAULT '[]';
+-- ALTER TABLE lookups ADD COLUMN IF NOT EXISTS pwsid TEXT;
+-- ALTER TABLE lookups ADD COLUMN IF NOT EXISTS contaminant_levels_json JSONB DEFAULT '[]';
