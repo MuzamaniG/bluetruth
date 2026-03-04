@@ -1,12 +1,46 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
 import { querySDWIS } from "@/lib/water-status";
+import { scrapeEWGByZip, scrapeEWGByPWSID } from "@/lib/ewg-scraper";
+import { getContaminantLimit } from "@/lib/epa-mcls";
 import type {
   CheckWaterRequest,
   CheckWaterResponse,
   Recommendation,
+  ContaminantLevel,
   Lookup,
 } from "@/types";
+
+async function geocodeCityToZip(
+  city: string,
+  state: string
+): Promise<string | undefined> {
+  const headers = { "User-Agent": "TapCheck/1.0 (water-safety-checker)" };
+
+  // Step 1: Forward geocode city/state to get lat/lon
+  const query = `${city}, ${state}, United States`;
+  const searchUrl = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query)}&limit=1`;
+  const searchRes = await fetch(searchUrl, {
+    headers,
+    signal: AbortSignal.timeout(5000),
+  });
+  if (!searchRes.ok) return undefined;
+  const searchData = await searchRes.json();
+  if (!Array.isArray(searchData) || searchData.length === 0) return undefined;
+
+  const { lat, lon } = searchData[0];
+  if (!lat || !lon) return undefined;
+
+  // Step 2: Reverse geocode lat/lon to get zip code
+  const reverseUrl = `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lon}&zoom=18&addressdetails=1`;
+  const reverseRes = await fetch(reverseUrl, {
+    headers,
+    signal: AbortSignal.timeout(5000),
+  });
+  if (!reverseRes.ok) return undefined;
+  const reverseData = await reverseRes.json();
+  return reverseData?.address?.postcode || undefined;
+}
 
 const DEFAULT_RECOMMENDATIONS: Record<string, Recommendation[]> = {
   green: [
@@ -85,10 +119,72 @@ const DEFAULT_RECOMMENDATIONS: Record<string, Recommendation[]> = {
   ],
 };
 
+// Convert a value between units for comparison
+function convertUnit(
+  value: number,
+  fromUnit: string,
+  toUnit: string
+): number {
+  const from = fromUnit.toLowerCase();
+  const to = toUnit.toLowerCase();
+  if (from === to) return value;
+
+  // Convert to ppb first
+  let inPPB = value;
+  if (from === "ppm" || from === "mg/l") inPPB = value * 1000;
+  else if (from === "ppt") inPPB = value / 1000;
+
+  // Convert from ppb to target
+  if (to === "ppm" || to === "mg/l") return inPPB / 1000;
+  if (to === "ppt") return inPPB * 1000;
+  return inPPB;
+}
+
+function buildContaminantLevels(
+  ewgData: { name: string; amountValue: number | null; unit: string }[]
+): ContaminantLevel[] {
+  return ewgData.map((c) => {
+    const limit = getContaminantLimit(c.name);
+    const ewgUnit = c.unit.toLowerCase();
+
+    // Convert limits to EWG's display unit
+    let displayMCL: number | null = null;
+    let displayHealthLimit: number | null = null;
+
+    if (limit) {
+      const limUnit = limit.unit.toLowerCase();
+      if (limit.mcl != null) {
+        displayMCL = convertUnit(limit.mcl, limUnit, ewgUnit);
+      }
+      displayHealthLimit = convertUnit(limit.healthLimit, limUnit, ewgUnit);
+    }
+
+    // Determine rating: red/yellow/green
+    let rating: "red" | "yellow" | "green" = "green";
+    if (c.amountValue != null) {
+      if (displayMCL != null && c.amountValue > displayMCL) {
+        rating = "red"; // exceeds legal limit
+      } else if (displayHealthLimit != null && c.amountValue > displayHealthLimit) {
+        rating = "yellow"; // exceeds health guideline but within legal limit
+      }
+    }
+
+    return {
+      name: c.name,
+      amount: c.amountValue,
+      unit: c.unit,
+      epaMCL: displayMCL,
+      healthLimit: displayHealthLimit,
+      healthSource: limit?.healthSource ?? null,
+      rating,
+    };
+  });
+}
+
 export async function POST(request: NextRequest) {
   try {
     const body: CheckWaterRequest = await request.json();
-    const { city, state } = body;
+    const { city, state, zip } = body;
 
     if (!city || !state) {
       return NextResponse.json(
@@ -148,15 +244,48 @@ export async function POST(request: NextRequest) {
         status: cached.status,
         summary: cached.summary,
         systemName: cached.system_name,
+        pwsid: cached.pwsid ?? null,
         violationCount: cached.violation_count,
         recentViolations: JSON.parse(cached.violations_json || "[]"),
+        contaminants: JSON.parse(cached.contaminants_json || "[]"),
+        leadCopperResults: JSON.parse(cached.lead_copper_json || "[]"),
+        contaminantLevels: JSON.parse(
+          cached.contaminant_levels_json || "[]"
+        ),
         recommendations: customRecs ?? recommendations,
       };
       return NextResponse.json(response);
     }
 
-    // Cache miss: query EPA
-    const waterStatus = await querySDWIS(normalizedCity, normalizedState);
+    // Cache miss: query EPA + scrape EWG in parallel
+    const waterStatusPromise = querySDWIS(normalizedCity, normalizedState);
+
+    const waterStatus = await waterStatusPromise;
+
+    // Scrape EWG: use zip (from user or geocoded from city/state)
+    let resolvedZip = zip;
+    if (!resolvedZip) {
+      try {
+        resolvedZip = await geocodeCityToZip(normalizedCity, normalizedState);
+      } catch {
+        // Geocoding failure is non-critical
+      }
+    }
+
+    let contaminantLevels: ContaminantLevel[] = [];
+    try {
+      let ewgData;
+      if (resolvedZip) {
+        ewgData = await scrapeEWGByZip(resolvedZip);
+      }
+      if (ewgData && ewgData.length > 0) {
+        contaminantLevels = buildContaminantLevels(ewgData);
+      }
+    } catch {
+      // EWG scrape failure is non-critical
+    }
+
+    waterStatus.contaminantLevels = contaminantLevels;
 
     // Store in Supabase cache
     if (supabase) {
@@ -167,8 +296,12 @@ export async function POST(request: NextRequest) {
           status: waterStatus.status,
           summary: waterStatus.summary,
           system_name: waterStatus.systemName,
+          pwsid: waterStatus.pwsid,
           violation_count: waterStatus.violationCount,
           violations_json: JSON.stringify(waterStatus.recentViolations),
+          contaminants_json: JSON.stringify(waterStatus.contaminants),
+          lead_copper_json: JSON.stringify(waterStatus.leadCopperResults),
+          contaminant_levels_json: JSON.stringify(contaminantLevels),
           checked_at: new Date().toISOString(),
         });
       } catch {

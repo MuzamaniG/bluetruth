@@ -15,6 +15,7 @@ export default function LocationInput() {
   const router = useRouter();
   const [city, setCity] = useState("");
   const [state, setState] = useState("");
+  const [zip, setZip] = useState("");
   const [detecting, setDetecting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -41,9 +42,12 @@ export default function LocationInput() {
           });
           const data = await res.json();
           if (data.city && data.state) {
-            router.push(
-              `/result?city=${encodeURIComponent(data.city)}&state=${encodeURIComponent(data.state)}`
-            );
+            const params = new URLSearchParams({
+              city: data.city,
+              state: data.state,
+            });
+            if (data.zip) params.set("zip", data.zip);
+            router.push(`/result?${params.toString()}`);
           } else {
             setError("Could not determine your city. Please enter it manually.");
             setDetecting(false);
@@ -63,9 +67,12 @@ export default function LocationInput() {
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!city.trim() || !state) return;
-    router.push(
-      `/result?city=${encodeURIComponent(city.trim())}&state=${encodeURIComponent(state)}`
-    );
+    const params = new URLSearchParams({
+      city: city.trim(),
+      state,
+    });
+    if (zip.trim()) params.set("zip", zip.trim());
+    router.push(`/result?${params.toString()}`);
   }
 
   return (
@@ -148,6 +155,23 @@ export default function LocationInput() {
             value={city}
             onChange={(e) => setCity(e.target.value)}
             placeholder="e.g. Flint"
+            className="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-slate-900 placeholder:text-slate-300 shadow-sm transition-all focus:border-cyan-400 focus:ring-2 focus:ring-cyan-100 focus:outline-none"
+          />
+        </div>
+        <div>
+          <label
+            htmlFor="zip"
+            className="block text-sm font-medium text-slate-600 mb-1.5"
+          >
+            Zip Code <span className="text-slate-400 font-normal">(optional)</span>
+          </label>
+          <input
+            id="zip"
+            type="text"
+            value={zip}
+            onChange={(e) => setZip(e.target.value.replace(/\D/g, "").slice(0, 5))}
+            placeholder="e.g. 48502"
+            maxLength={5}
             className="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-slate-900 placeholder:text-slate-300 shadow-sm transition-all focus:border-cyan-400 focus:ring-2 focus:ring-cyan-100 focus:outline-none"
           />
         </div>
