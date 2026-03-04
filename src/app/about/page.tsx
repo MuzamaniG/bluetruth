@@ -6,16 +6,41 @@ export default function AboutPage() {
       <div className="mx-auto max-w-2xl">
         <div className="animate-in">
           <h1 className="text-3xl font-bold tracking-tight text-slate-900">
-            About TapCheck
+            About BlueTruth
           </h1>
           <p className="mt-3 text-base leading-relaxed text-slate-500">
-            TapCheck helps you understand the safety of your tap water using
+            BlueTruth helps you understand the safety of your tap water using
             publicly available EPA data. Enter your city and state to get a clear
             safety rating.
           </p>
         </div>
 
         <div className="mt-12 space-y-10">
+          {/* Our Mission */}
+          <section className="animate-in" style={{ animationDelay: "50ms" }}>
+            <h2 className="text-lg font-bold text-slate-900">Our mission</h2>
+            <div className="mt-4 rounded-xl border border-cyan-100 bg-gradient-to-br from-cyan-50/60 to-teal-50/60 p-6">
+              <p className="text-sm leading-relaxed text-slate-700">
+                Every person deserves to know what&apos;s in their drinking water.
+                Yet for most Americans, that information is buried in government
+                databases, scattered across regulatory reports, or hidden behind
+                technical jargon.
+              </p>
+              <p className="mt-3 text-sm leading-relaxed text-slate-700">
+                BlueTruth exists to change that. We pull real contaminant
+                measurements and violation records from public sources, compare
+                them against federal legal limits and independent health
+                guidelines, and present it all in plain language — so you can make
+                informed decisions about the water you and your family drink every
+                day.
+              </p>
+              <p className="mt-3 text-sm font-medium text-slate-800">
+                Clean water is a right, not a privilege. Transparency is the first
+                step.
+              </p>
+            </div>
+          </section>
+
           {/* Methodology */}
           <section className="animate-in" style={{ animationDelay: "100ms" }}>
             <h2 className="text-lg font-bold text-slate-900">
@@ -23,7 +48,7 @@ export default function AboutPage() {
             </h2>
             <div className="mt-4 space-y-4 text-sm leading-relaxed text-slate-600">
               <p>
-                TapCheck queries the EPA&apos;s Safe Drinking Water Information
+                BlueTruth queries the EPA&apos;s Safe Drinking Water Information
                 System (SDWIS) through the Envirofacts REST API. We look up
                 public water systems that serve your city and check their
                 violation history.
@@ -106,7 +131,7 @@ export default function AboutPage() {
                 <strong className="text-slate-800">
                   Not a substitute for professional testing.
                 </strong>{" "}
-                TapCheck provides a general overview based on publicly available
+                BlueTruth provides a general overview based on publicly available
                 regulatory data. It does not test your actual water.
               </p>
               <p>

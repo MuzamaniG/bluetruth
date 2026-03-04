@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
+import Image from "next/image";
 import Link from "next/link";
 import "./globals.css";
 
@@ -14,9 +15,9 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "TapCheck — Is Your Tap Water Safe?",
+  title: "BlueTruth — Peace of Mind",
   description:
-    "Check the safety of your tap water using EPA violation data. Get a clear Green, Yellow, or Red safety rating for your city's water system.",
+    "Check the safety of your tap water using EPA data and real contaminant measurements. Get a clear safety rating for your city's water system.",
 };
 
 export default function RootLayout({
@@ -36,10 +37,8 @@ export default function RootLayout({
               href="/"
               className="flex items-center gap-2 text-lg font-bold tracking-tight text-slate-900"
             >
-              <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-gradient-to-br from-cyan-500 to-teal-500 text-xs font-black text-white">
-                TC
-              </span>
-              TapCheck
+              <Image src="/logo.png" alt="BlueTruth" width={32} height={32} className="h-8 w-8 object-contain" />
+              BlueTruth
             </Link>
             <div className="flex items-center gap-6">
               <Link
@@ -66,7 +65,7 @@ export default function RootLayout({
           <div className="mx-auto max-w-4xl px-6 py-8">
             <div className="flex flex-col items-center justify-between gap-4 sm:flex-row">
               <p className="text-xs text-slate-400">
-                TapCheck uses EPA SDWIS data. Not a substitute for professional
+                BlueTruth uses EPA SDWIS data. Not a substitute for professional
                 water testing.
               </p>
               <p className="text-xs text-slate-400">
