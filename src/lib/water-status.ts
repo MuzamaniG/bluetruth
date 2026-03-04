@@ -1,4 +1,11 @@
-import type { Violation, WaterStatus, StatusLevel } from "@/types";
+import type {
+  Violation,
+  WaterStatus,
+  StatusLevel,
+  ContaminantSummary,
+  LeadCopperSample,
+} from "@/types";
+import { getContaminantName } from "@/lib/contaminant-codes";
 
 const EPA_BASE = "https://data.epa.gov/efservice";
 
@@ -13,20 +20,38 @@ const HEALTH_BASED_CODES = new Set([
 ]);
 
 interface SDWISWaterSystem {
-  PWSID: string;
-  PWS_NAME: string;
-  CITY_NAME?: string;
-  STATE_CODE?: string;
-  POPULATION_SERVED_COUNT?: number;
+  pwsid: string;
+  pws_name: string;
+  city_name?: string;
+  state_code?: string;
+  population_served_count?: number;
 }
 
 interface SDWISViolation {
-  VIOLATION_CODE?: string;
-  CONTAMINANT_CODE?: string;
-  VIOLATION_NAME?: string;
-  COMPL_PER_BEGIN_DATE?: string;
-  IS_HEALTH_BASED_IND?: string;
-  VIOLATION_CATEGORY_CODE?: string;
+  violation_code?: string;
+  contaminant_code?: string;
+  compl_per_begin_date?: string;
+  is_health_based_ind?: string;
+  violation_category_code?: string;
+  viol_measure?: number | string | null;
+  unit_of_measure?: string | null;
+  state_mcl?: number | string | null;
+  rtc_date?: string | null;
+  rule_code?: string | null;
+}
+
+interface SDWISLCRSample {
+  sample_id?: string;
+  pwsid?: string;
+  contaminant_code?: string;
+  sample_measure?: number | null;
+  unit_of_measure?: string | null;
+}
+
+function parseNumber(val: unknown): number | null {
+  if (val == null || val === "") return null;
+  const n = Number(val);
+  return isNaN(n) ? null : n;
 }
 
 export async function querySDWIS(
@@ -56,20 +81,35 @@ export async function querySDWIS(
       summary:
         "We couldn't find a matching water system for this location. This may mean the city name doesn't match EPA records, or the area is served by a regional system.",
       systemName: null,
+      pwsid: null,
       violationCount: 0,
       recentViolations: [],
+      contaminants: [],
+      leadCopperResults: [],
+      contaminantLevels: [],
     };
   }
 
   // Use the system serving the most people
   const system = systems.reduce((best, s) =>
-    (s.POPULATION_SERVED_COUNT ?? 0) > (best.POPULATION_SERVED_COUNT ?? 0)
+    (s.population_served_count ?? 0) > (best.population_served_count ?? 0)
       ? s
       : best
   );
 
-  // Step 2: Fetch violations for this system
-  const violationsUrl = `${EPA_BASE}/VIOLATION/PWSID/${system.PWSID}/ROWS/0:100/JSON`;
+  // Step 2: Fetch violations and LCR samples in parallel
+  const [violations, leadCopperResults] = await Promise.all([
+    fetchViolations(system.pwsid),
+    fetchLeadCopperSamples(system.pwsid),
+  ]);
+
+  const result = computeStatus(violations, leadCopperResults, system.pws_name);
+  result.pwsid = system.pwsid;
+  return result;
+}
+
+async function fetchViolations(pwsid: string): Promise<Violation[]> {
+  const violationsUrl = `${EPA_BASE}/VIOLATION/PWSID/${pwsid}/ROWS/0:100/JSON`;
 
   let rawViolations: SDWISViolation[] = [];
   try {
@@ -82,21 +122,130 @@ export async function querySDWIS(
     // If we can't fetch violations, treat as no violations found
   }
 
-  const violations: Violation[] = rawViolations.map((v) => ({
-    code: v.VIOLATION_CODE ?? v.CONTAMINANT_CODE ?? "Unknown",
-    name: v.VIOLATION_NAME ?? "Unknown violation",
-    beginDate: v.COMPL_PER_BEGIN_DATE ?? "",
-    isHealthBased:
-      v.IS_HEALTH_BASED_IND === "Y" ||
-      HEALTH_BASED_CODES.has(v.VIOLATION_CATEGORY_CODE ?? ""),
-  }));
+  return rawViolations.map((v) => {
+    const contaminantCode = v.contaminant_code ?? "";
+    const contaminantName = contaminantCode
+      ? getContaminantName(contaminantCode)
+      : "Unknown";
+    return {
+      code: v.violation_code ?? contaminantCode ?? "Unknown",
+      name: contaminantName,
+      contaminantCode,
+      contaminantName,
+      beginDate: v.compl_per_begin_date ?? "",
+      isHealthBased:
+        v.is_health_based_ind === "Y" ||
+        HEALTH_BASED_CODES.has(v.violation_category_code ?? ""),
+      measuredLevel: parseNumber(v.viol_measure),
+      unit: v.unit_of_measure ?? null,
+      federalMCL: null,
+      stateMCL: parseNumber(v.state_mcl),
+      returnToComplianceDate: v.rtc_date ?? null,
+      ruleCode: v.rule_code ?? null,
+    };
+  });
+}
 
-  const result = computeStatus(violations, system.PWS_NAME);
-  return result;
+async function fetchLeadCopperSamples(
+  pwsid: string
+): Promise<LeadCopperSample[]> {
+  const lcrUrl = `${EPA_BASE}/LCR_SAMPLE_RESULT/PWSID/${pwsid}/ROWS/0:50/JSON`;
+
+  let rawSamples: SDWISLCRSample[] = [];
+  try {
+    const res = await fetch(lcrUrl, { next: { revalidate: 3600 } });
+    if (res.ok) {
+      const data = await res.json();
+      rawSamples = Array.isArray(data) ? data : [];
+    }
+  } catch {
+    // LCR data unavailable — not critical
+  }
+
+  // LCR uses PB90 (lead 90th percentile) and CU90 (copper 90th percentile)
+  const ACTION_LEVELS: Record<string, number> = {
+    PB90: 0.015,
+    CU90: 1.3,
+  };
+
+  const LCR_NAMES: Record<string, string> = {
+    PB90: "Lead (90th percentile)",
+    CU90: "Copper (90th percentile)",
+  };
+
+  return rawSamples.map((s) => {
+    const contaminantCode = s.contaminant_code ?? "";
+    const result90th = parseNumber(s.sample_measure);
+    const actionLevel = ACTION_LEVELS[contaminantCode] ?? null;
+    return {
+      sampleId: s.sample_id ?? "",
+      pwsid: s.pwsid ?? "",
+      samplingPeriod: "",
+      contaminantCode,
+      contaminantName:
+        LCR_NAMES[contaminantCode] ?? getContaminantName(contaminantCode),
+      result90thPercentile: result90th,
+      unit: s.unit_of_measure ?? null,
+      actionLevel,
+      exceedance:
+        result90th != null && actionLevel != null && result90th > actionLevel,
+    };
+  });
+}
+
+function buildContaminantSummaries(
+  violations: Violation[]
+): ContaminantSummary[] {
+  const map = new Map<string, ContaminantSummary>();
+
+  for (const v of violations) {
+    const key = v.contaminantCode || v.code;
+    const existing = map.get(key);
+
+    if (!existing) {
+      map.set(key, {
+        contaminantCode: v.contaminantCode || v.code,
+        contaminantName: v.contaminantName,
+        violationCount: 1,
+        mostRecentDate: v.beginDate,
+        highestMeasuredLevel: v.measuredLevel,
+        unit: v.unit,
+        mcl: v.stateMCL,
+        isHealthBased: v.isHealthBased,
+      });
+    } else {
+      existing.violationCount++;
+      if (
+        v.beginDate &&
+        (!existing.mostRecentDate || v.beginDate > existing.mostRecentDate)
+      ) {
+        existing.mostRecentDate = v.beginDate;
+      }
+      if (
+        v.measuredLevel != null &&
+        (existing.highestMeasuredLevel == null ||
+          v.measuredLevel > existing.highestMeasuredLevel)
+      ) {
+        existing.highestMeasuredLevel = v.measuredLevel;
+        existing.unit = v.unit;
+      }
+      if (v.isHealthBased) {
+        existing.isHealthBased = true;
+      }
+      if (existing.mcl == null) {
+        existing.mcl = v.stateMCL;
+      }
+    }
+  }
+
+  return Array.from(map.values()).sort(
+    (a, b) => b.violationCount - a.violationCount
+  );
 }
 
 export function computeStatus(
   violations: Violation[],
+  leadCopperResults: LeadCopperSample[],
   systemName: string
 ): WaterStatus {
   const fiveYearsAgo = new Date();
@@ -132,11 +281,17 @@ export function computeStatus(
     summary = `${systemName} has no violations on record. Your tap water meets all EPA safety standards.`;
   }
 
+  const contaminants = buildContaminantSummaries(recentViolations);
+
   return {
     status,
     summary,
     systemName,
+    pwsid: null,
     violationCount: recentViolations.length,
     recentViolations: recentViolations.slice(0, 10),
+    contaminants,
+    leadCopperResults,
+    contaminantLevels: [],
   };
 }

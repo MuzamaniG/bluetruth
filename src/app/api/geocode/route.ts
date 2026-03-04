@@ -36,11 +36,12 @@ export async function POST(request: NextRequest) {
       address.county ??
       "";
     const state = address.state ?? "";
+    const zip = address.postcode ?? "";
 
     // Convert state name to 2-letter abbreviation
     const stateAbbrev = STATE_ABBREVIATIONS[state.toUpperCase()] ?? state;
 
-    return NextResponse.json({ city, state: stateAbbrev });
+    return NextResponse.json({ city, state: stateAbbrev, zip });
   } catch {
     return NextResponse.json(
       { error: "Internal server error" },
